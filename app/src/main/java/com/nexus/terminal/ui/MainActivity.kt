@@ -1,0 +1,37 @@
+package com.nexus.terminal.ui
+
+import android.app.Activity
+import android.graphics.Color
+import android.os.Bundle
+import android.view.Gravity
+import android.widget.*
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.nexus.terminal.NexusApp
+import com.nexus.terminal.data.Prefs
+import com.nexus.terminal.engine.SessionRuntime
+import com.nexus.terminal.engine.TerminalView
+import java.io.File
+
+class MainActivity:Activity(){
+ private val app get()=application as NexusApp
+ private lateinit var root:LinearLayout;private lateinit var content:FrameLayout;private lateinit var tabs:LinearLayout;private var current:SessionRuntime?=null;private val prefs by lazy{Prefs(this)}
+ override fun onActivityResult(requestCode:Int,resultCode:Int,data:android.content.Intent?){super.onActivityResult(requestCode,resultCode,data);if(requestCode==2001&&resultCode==RESULT_OK)data?.data?.let{contentResolver.takePersistableUriPermission(it,data.flags and (android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION));Toast.makeText(this,"Shared folder granted",Toast.LENGTH_SHORT).show()}}
+ override fun onCreate(b:Bundle?){super.onCreate(b);window.statusBarColor=Color.rgb(9,12,16);build();if(app.sessions.list().isEmpty())showTerminal(app.sessions.create("Terminal")) else showTerminal(app.sessions.get(app.sessions.list().first().id)!!)}
+ private fun build(){
+  root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setBackgroundColor(Color.rgb(9,12,16))}
+  tabs=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;setPadding(8,8,8,4)};root.addView(tabs,LinearLayout.LayoutParams(-1,56))
+  content=FrameLayout(this);root.addView(content,LinearLayout.LayoutParams(-1,0,1f))
+  val nav=LinearLayout(this).apply{setPadding(6,4,6,6);gravity=Gravity.CENTER}
+  listOf("Home","Terminal","Files","Packages","Settings").forEach{label->val x=MaterialButton(this).apply{text=label;textSize=11f;insetTop=0;insetBottom=0;setOnClickListener{when(label){"Home"->home();"Terminal"->current?.let{showTerminal(it)};"Files"->files();"Packages"->packages();"Settings"->settings()}}};nav.addView(x,LinearLayout.LayoutParams(0,52,1f))}
+  root.addView(nav);setContentView(root)
+ }
+ private fun rebuildTabs(){tabs.removeAllViews();app.sessions.list().forEach{s->val b=MaterialButton(this).apply{text=s.name;isAllCaps=false;setOnClickListener{app.sessions.get(s.id)?.let{showTerminal(it)}}};tabs.addView(b,LinearLayout.LayoutParams(0,48,1f))};val add=MaterialButton(this).apply{text="+";setOnClickListener{showTerminal(app.sessions.create("Session ${app.sessions.list().size+1}"))}};tabs.addView(add,LinearLayout.LayoutParams(56,48))}
+ private fun showTerminal(r:SessionRuntime){current=r;rebuildTabs();content.removeAllViews();val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL};val t=TerminalView(this);t.onCommandSubmitted={prefs.addHistory(it)};box.addView(t,LinearLayout.LayoutParams(-1,0,1f));val keys=HorizontalScrollView(this);val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};val labels=listOf("ESC","TAB","CTRL","ALT","←","↑","↓","→","HOME","END","PGUP","PGDN","/","-","_","|","~","$","&",";",":","(",")","{","}");labels.forEach{v->row.addView(TextView(this).apply{text=v;setTextColor(Color.WHITE);gravity=Gravity.CENTER;setPadding(15,8,15,8);setOnClickListener{when(v){"CTRL"->r.send("\u0003");"ESC"->r.send("\u001b");"TAB"->r.send("\t");"←"->r.send("\u001b[D");"→"->r.send("\u001b[C");"↑"->r.send("\u001b[A");"↓"->r.send("\u001b[B");"HOME"->r.send("\u001b[H");"END"->r.send("\u001b[F");"PGUP"->r.send("\u001b[5~");"PGDN"->r.send("\u001b[6~");else->r.send(v)}}})};keys.addView(row);box.addView(keys,LinearLayout.LayoutParams(-1,54));content.addView(box);t.attach(r)}
+ private fun home(){content.removeAllViews();val l=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(24,24,24,24)};l.addView(TextView(this).apply{text="NEXUS TERMINAL";textSize=28f;setTextColor(Color.WHITE)});l.addView(TextView(this).apply{text="A real Android terminal environment\n\nActive sessions: ${app.sessions.list().size}\nHome: ${app.sessions.home.absolutePath}\nFree storage: ${filesDir.freeSpace/1024/1024} MB";textSize=16f;setTextColor(Color.LTGRAY);setPadding(0,20,0,20)});MaterialButton(this).apply{text="New Session";setOnClickListener{showTerminal(app.sessions.create())}}.also{l.addView(it)};content.addView(l)}
+ private fun files(){content.removeAllViews();val l=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(12,12,12,12)};l.addView(TextView(this).apply{text=app.sessions.home.absolutePath;setTextColor(Color.WHITE);textSize=15f});val list=ListView(this);val fs=app.sessions.home.listFiles()?.sortedBy{it.name.lowercase()}.orEmpty();list.adapter=ArrayAdapter(this,android.R.layout.simple_list_item_2,fs.map{if(it.isDirectory)"📁 ${it.name}\nDirectory" else "📄 ${it.name}\n${it.length()} bytes"});list.setOnItemClickListener{_,_,pos,_->if(fs[pos].isFile)startActivity(android.content.Intent(this,com.nexus.terminal.editor.TextEditorActivity::class.java).putExtra("path",fs[pos].absolutePath))};l.addView(list,LinearLayout.LayoutParams(-1,0,1f));MaterialButton(this).apply{text="Create file";setOnClickListener{dialogCreateFile()}}.also{l.addView(it)};MaterialButton(this).apply{text="Choose shared folder";setOnClickListener{startActivityForResult(android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION or android.content.Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),2001)}}.also{l.addView(it)};content.addView(l)}
+ private fun dialogCreateFile(){val e=EditText(this);MaterialAlertDialogBuilder(this).setTitle("New file").setView(e).setPositiveButton("Create"){_,_->runCatching{File(app.sessions.home,e.text.toString()).createNewFile()};files()}.setNegativeButton("Cancel",null).show()}
+ private fun packages(){simple("Packages","Package operations are real shell operations only when a package manager/repository has been installed or configured. The app never fabricates installed-package state.","Open terminal"){showTerminal(current?:app.sessions.create())}}
+ private fun settings(){val l=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(18,18,18,18)};l.addView(TextView(this).apply{text="Settings";textSize=26f;setTextColor(Color.WHITE)});val e=EditText(this).apply{hint="Default shell path (blank = auto)";setText(prefs.getString("shell",""));setTextColor(Color.WHITE)};l.addView(e);MaterialButton(this).apply{text="Save shell";setOnClickListener{prefs.putString("shell",e.text.toString());Toast.makeText(this@MainActivity,"Saved",Toast.LENGTH_SHORT).show()}}.also{l.addView(it)};l.addView(TextView(this).apply{text="Local configuration only. No credentials, analytics, or hidden commands are used.";setTextColor(Color.LTGRAY);setPadding(0,20,0,0)});content.removeAllViews();content.addView(l)}
+ private fun simple(title:String,msg:String,button:String,action:()->Unit){content.removeAllViews();val l=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(24,24,24,24)};l.addView(TextView(this).apply{text=title;textSize=26f;setTextColor(Color.WHITE)});l.addView(TextView(this).apply{text=msg;textSize=15f;setTextColor(Color.LTGRAY);setPadding(0,20,0,20)});MaterialButton(this).apply{text=button;setOnClickListener{action()}}.also{l.addView(it)};content.addView(l)}
+}

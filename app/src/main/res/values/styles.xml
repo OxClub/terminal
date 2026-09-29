@@ -1,0 +1,7 @@
+<resources>
+<style name="Theme.NexusTerminal" parent="Theme.Material3.DayNight.NoActionBar">
+    <item name="android:fontFamily">monospace</item><item name="android:windowLightStatusBar">false</item>
+    <item name="android:statusBarColor">#0A0D12</item><item name="android:navigationBarColor">#0A0D12</item>
+    <item name="android:colorAccent">#64B5F6</item>
+</style>
+</resources>
