@@ -554,4 +554,8 @@ class TerminalBuffer(
     fun cursorPosition(): Pair<Int, Int> {
         return cursorRow to cursorCol.coerceIn(0, columns - 1)
     }
+
+    fun rowsCount(): Int = rows
+
+    fun columnsCount(): Int = columns
 }

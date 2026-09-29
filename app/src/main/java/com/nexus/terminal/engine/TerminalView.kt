@@ -1,5 +1,7 @@
 package com.nexus.terminal.engine
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -7,7 +9,10 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
+import android.view.ActionMode
 import android.view.KeyEvent
+import android.view.Menu
+import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.BaseInputConnection
@@ -15,6 +20,9 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import java.nio.charset.StandardCharsets
+import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.min
 
 class TerminalView(context: Context) : View(context) {
 
@@ -47,6 +55,21 @@ class TerminalView(context: Context) : View(context) {
 
     var onCommandSubmitted: ((String) -> Unit)? = null
 
+    // Selection state.
+    private var selecting = false
+    private var selectionStartRow = 0
+    private var selectionStartCol = 0
+    private var selectionEndRow = 0
+    private var selectionEndCol = 0
+
+    private var selectionActionMode: ActionMode? = null
+
+    private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(150, 0, 180, 255)
+    }
+
+    private val selectedTextPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
     init {
         isFocusable = true
         isFocusableInTouchMode = true
@@ -64,13 +87,11 @@ class TerminalView(context: Context) : View(context) {
                 buffer.write(
                     String(bytes, StandardCharsets.UTF_8)
                 )
-
                 invalidate()
             }
         }
 
         outputListener = listener
-
         session.attach(listener)
 
         requestFocus()
@@ -87,6 +108,9 @@ class TerminalView(context: Context) : View(context) {
 
         attachedSession = null
         outputListener = null
+        selectionActionMode?.finish()
+        selectionActionMode = null
+        selecting = false
     }
 
     private fun showKeyboard() {
@@ -140,7 +164,6 @@ class TerminalView(context: Context) : View(context) {
                 if (text.isNotEmpty()) {
                     send(text.toString())
                 }
-
                 return true
             }
 
@@ -151,7 +174,6 @@ class TerminalView(context: Context) : View(context) {
                 if (text.isNotEmpty()) {
                     send(text.toString())
                 }
-
                 return true
             }
 
@@ -163,6 +185,10 @@ class TerminalView(context: Context) : View(context) {
                     send("\u007F")
                 }
 
+                repeat(afterLength.coerceAtMost(16)) {
+                    sendBytes(byteArrayOf(0x1B, 0x5B, 0x33, 0x7E))
+                }
+
                 return true
             }
 
@@ -172,7 +198,6 @@ class TerminalView(context: Context) : View(context) {
                 if (event.action == KeyEvent.ACTION_DOWN) {
                     return handleKey(event)
                 }
-
                 return true
             }
 
@@ -216,7 +241,6 @@ class TerminalView(context: Context) : View(context) {
                     event.unicodeChar.toByte()
                 )
             )
-
             return true
         }
 
@@ -284,12 +308,316 @@ class TerminalView(context: Context) : View(context) {
         event: MotionEvent
     ): Boolean {
 
-        if (event.action == MotionEvent.ACTION_DOWN) {
-            requestFocus()
-            showKeyboard()
+        when (event.actionMasked) {
+
+            MotionEvent.ACTION_DOWN -> {
+                requestFocus()
+
+                downX = event.x
+                downY = event.y
+
+                if (selecting) {
+                    selectionActionMode?.finish()
+                    selecting = false
+                }
+
+                val pos = pointToCell(event.x, event.y)
+
+                selectionStartRow = pos.first
+                selectionStartCol = pos.second
+                selectionEndRow = pos.first
+                selectionEndCol = pos.second
+
+                // Delay selection activation so a normal tap still opens keyboard.
+                postDelayed({
+                    if (isPressedForSelection) {
+                        selecting = true
+                        invalidate()
+                    }
+                }, 350)
+
+                isPressedForSelection = true
+                return true
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (isPressedForSelection) {
+                    val dx = event.x - downX
+                    val dy = event.y - downY
+
+                    if (dx * dx + dy * dy > 64f) {
+                        isPressedForSelection = false
+                    }
+                }
+
+                if (selecting) {
+                    val pos = pointToCell(event.x, event.y)
+                    selectionEndRow = pos.first
+                    selectionEndCol = pos.second
+                    invalidate()
+                }
+
+                return true
+            }
+
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL -> {
+                if (selecting) {
+                    isPressedForSelection = false
+
+                    val pos = pointToCell(event.x, event.y)
+                    selectionEndRow = pos.first
+                    selectionEndCol = pos.second
+
+                    normalizeSelection()
+                    showSelectionActionMode()
+                    invalidate()
+                    return true
+                }
+
+                isPressedForSelection = false
+                requestFocus()
+                showKeyboard()
+                return true
+            }
         }
 
         return true
+    }
+
+    private var isPressedForSelection = false
+    private var downX = 0f
+    private var downY = 0f
+
+    private fun pointToCell(
+        x: Float,
+        y: Float
+    ): Pair<Int, Int> {
+
+        val row =
+            floor(y / lineHeight)
+                .toInt()
+                .coerceIn(0, buffer.rowsCount() - 1)
+
+        val col =
+            floor(x / charWidth)
+                .toInt()
+                .coerceIn(0, buffer.columnsCount() - 1)
+
+        return row to col
+    }
+
+    private fun normalizeSelection() {
+        val startBeforeEnd =
+            selectionStartRow < selectionEndRow ||
+            (
+                selectionStartRow == selectionEndRow &&
+                selectionStartCol <= selectionEndCol
+            )
+
+        if (!startBeforeEnd) {
+            val r = selectionStartRow
+            val c = selectionStartCol
+
+            selectionStartRow = selectionEndRow
+            selectionStartCol = selectionEndCol
+
+            selectionEndRow = r
+            selectionEndCol = c
+        }
+    }
+
+    private fun hasSelection(): Boolean {
+        return selecting && (
+            selectionStartRow != selectionEndRow ||
+            selectionStartCol != selectionEndCol
+        )
+    }
+
+    private fun selectedText(): String {
+        if (!hasSelection()) return ""
+
+        val chars = buffer.snapshot()
+
+        val startRow =
+            selectionStartRow.coerceIn(0, chars.lastIndex)
+
+        val endRow =
+            selectionEndRow.coerceIn(0, chars.lastIndex)
+
+        val out = StringBuilder()
+
+        for (row in startRow..endRow) {
+
+            val line = chars[row]
+
+            val from =
+                if (row == startRow)
+                    selectionStartCol
+                else
+                    0
+
+            val to =
+                if (row == endRow)
+                    selectionEndCol
+                else
+                    line.lastIndex
+
+            if (to >= from) {
+                for (col in from..to) {
+                    out.append(line.getOrElse(col) { ' ' })
+                }
+            }
+
+            if (row != endRow) {
+                out.append('\n')
+            }
+        }
+
+        return out.toString().trimEnd()
+    }
+
+    private fun copySelection() {
+        val text = selectedText()
+
+        if (text.isEmpty()) return
+
+        val clipboard =
+            context.getSystemService(
+                Context.CLIPBOARD_SERVICE
+            ) as ClipboardManager
+
+        clipboard.setPrimaryClip(
+            ClipData.newPlainText(
+                "NEXUS Terminal",
+                text
+            )
+        )
+    }
+
+    private fun pasteClipboard() {
+
+        val clipboard =
+            context.getSystemService(
+                Context.CLIPBOARD_SERVICE
+            ) as ClipboardManager
+
+        if (!clipboard.hasPrimaryClip()) return
+
+        val item =
+            clipboard.primaryClip?.getItemAt(0)
+                ?: return
+
+        val text =
+            item.coerceToText(context).toString()
+
+        if (text.isNotEmpty()) {
+            send(text)
+        }
+    }
+
+    private fun selectAllTerminal() {
+        val rows = buffer.rowsCount()
+        val cols = buffer.columnsCount()
+
+        selectionStartRow = 0
+        selectionStartCol = 0
+
+        selectionEndRow = rows - 1
+        selectionEndCol = cols - 1
+
+        selecting = true
+
+        normalizeSelection()
+        invalidate()
+
+        selectionActionMode?.invalidate()
+    }
+
+    private fun showSelectionActionMode() {
+
+        selectionActionMode?.finish()
+
+        selectionActionMode =
+            startActionMode(
+                object : ActionMode.Callback {
+
+                    override fun onCreateActionMode(
+                        mode: ActionMode,
+                        menu: Menu
+                    ): Boolean {
+
+                        menu.add(
+                            0,
+                            MENU_COPY,
+                            0,
+                            "Copy"
+                        ).setShowAsAction(
+                            MenuItem.SHOW_AS_ACTION_ALWAYS
+                        )
+
+                        menu.add(
+                            0,
+                            MENU_PASTE,
+                            1,
+                            "Paste"
+                        )
+
+                        menu.add(
+                            0,
+                            MENU_SELECT_ALL,
+                            2,
+                            "Select all"
+                        )
+
+                        return true
+                    }
+
+                    override fun onPrepareActionMode(
+                        mode: ActionMode,
+                        menu: Menu
+                    ): Boolean {
+                        return true
+                    }
+
+                    override fun onActionItemClicked(
+                        mode: ActionMode,
+                        item: MenuItem
+                    ): Boolean {
+
+                        when (item.itemId) {
+
+                            MENU_COPY -> {
+                                copySelection()
+                                mode.finish()
+                                return true
+                            }
+
+                            MENU_PASTE -> {
+                                pasteClipboard()
+                                mode.finish()
+                                return true
+                            }
+
+                            MENU_SELECT_ALL -> {
+                                selectAllTerminal()
+                                return true
+                            }
+                        }
+
+                        return false
+                    }
+
+                    override fun onDestroyActionMode(
+                        mode: ActionMode
+                    ) {
+                        selecting = false
+                        selectionActionMode = null
+                        invalidate()
+                    }
+                },
+                ActionMode.TYPE_FLOATING
+            )
     }
 
     override fun onSizeChanged(
@@ -304,15 +632,20 @@ class TerminalView(context: Context) : View(context) {
             paint.measureText("M").coerceAtLeast(1f)
 
         lineHeight =
-            (paint.fontMetrics.descent -
-             paint.fontMetrics.ascent)
-                .coerceAtLeast(1f)
+            (
+                paint.fontMetrics.descent -
+                paint.fontMetrics.ascent
+            ).coerceAtLeast(1f)
 
         val cols =
-            (w / charWidth).toInt().coerceAtLeast(1)
+            (w / charWidth)
+                .toInt()
+                .coerceAtLeast(1)
 
         val rows =
-            (h / lineHeight).toInt().coerceAtLeast(1)
+            (h / lineHeight)
+                .toInt()
+                .coerceAtLeast(1)
 
         buffer.resize(cols, rows)
 
@@ -350,7 +683,9 @@ class TerminalView(context: Context) : View(context) {
 
         return when {
             index in 0..7 -> normal[index]
-            index in 8..15 -> bright[index - 8]
+
+            index in 8..15 ->
+                bright[index - 8]
 
             index in 16..231 -> {
                 val n = index - 16
@@ -361,7 +696,11 @@ class TerminalView(context: Context) : View(context) {
                 fun v(x: Int): Int =
                     if (x == 0) 0 else 55 + x * 40
 
-                Color.rgb(v(r), v(g), v(b))
+                Color.rgb(
+                    v(r),
+                    v(g),
+                    v(b)
+                )
             }
 
             index in 232..255 -> {
@@ -391,8 +730,28 @@ class TerminalView(context: Context) : View(context) {
                 val x = col * charWidth
                 val y = row * lineHeight
 
-                if (cell.bg != 0) {
-                    cursorPaint.color = ansiColor(cell.bg)
+                val selected =
+                    isCellSelected(row, col)
+
+                if (selected) {
+                    selectionPaint.color =
+                        Color.argb(
+                            180,
+                            0,
+                            180,
+                            255
+                        )
+
+                    canvas.drawRect(
+                        x,
+                        y,
+                        x + charWidth,
+                        y + lineHeight,
+                        selectionPaint
+                    )
+                } else if (cell.bg != 0) {
+                    cursorPaint.color =
+                        ansiColor(cell.bg)
 
                     canvas.drawRect(
                         x,
@@ -405,11 +764,18 @@ class TerminalView(context: Context) : View(context) {
 
                 if (cell.ch != ' ') {
 
-                    paint.color = ansiColor(cell.fg)
+                    paint.color =
+                        if (selected)
+                            Color.BLACK
+                        else
+                            ansiColor(cell.fg)
 
                     paint.typeface =
                         if (cell.bold)
-                            Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+                            Typeface.create(
+                                Typeface.MONOSPACE,
+                                Typeface.BOLD
+                            )
                         else
                             Typeface.MONOSPACE
 
@@ -423,7 +789,7 @@ class TerminalView(context: Context) : View(context) {
             }
         }
 
-        if (cursorVisible) {
+        if (cursorVisible && !selecting) {
 
             val cursor = buffer.cursorPosition()
 
@@ -431,7 +797,12 @@ class TerminalView(context: Context) : View(context) {
             val y = cursor.first * lineHeight
 
             cursorPaint.color =
-                Color.argb(190, 0, 220, 255)
+                Color.argb(
+                    190,
+                    0,
+                    220,
+                    255
+                )
 
             canvas.drawRect(
                 x,
@@ -443,8 +814,45 @@ class TerminalView(context: Context) : View(context) {
         }
     }
 
+    private fun isCellSelected(
+        row: Int,
+        col: Int
+    ): Boolean {
+
+        if (!hasSelection()) return false
+
+        if (row < selectionStartRow ||
+            row > selectionEndRow
+        ) {
+            return false
+        }
+
+        if (selectionStartRow == selectionEndRow) {
+            return col >= selectionStartCol &&
+                   col <= selectionEndCol
+        }
+
+        if (row == selectionStartRow) {
+            return col >= selectionStartCol
+        }
+
+        if (row == selectionEndRow) {
+            return col <= selectionEndCol
+        }
+
+        return true
+    }
+
+    companion object {
+        private const val MENU_COPY = 1001
+        private const val MENU_PASTE = 1002
+        private const val MENU_SELECT_ALL = 1003
+    }
+
     override fun onDetachedFromWindow() {
         main.removeCallbacks(blink)
+        selectionActionMode?.finish()
+        selectionActionMode = null
         detach()
         super.onDetachedFromWindow()
     }
