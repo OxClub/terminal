@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.view.MotionEvent
 import android.view.View
+import java.nio.charset.StandardCharsets
 
 class TerminalView(context: Context) : View(context) {
 
@@ -24,9 +25,15 @@ class TerminalView(context: Context) : View(context) {
 
     private var charWidth = 0f
     private var lineHeight = 0f
+    private var attachedSession: SessionRuntime? = null
+    private var outputListener: ((ByteArray) -> Unit)? = null
+
+    var onCommandSubmitted: ((String) -> Unit)? = null
 
     init {
         setBackgroundColor(Color.rgb(8, 12, 16))
+        isFocusable = true
+        isFocusableInTouchMode = true
 
         val metrics = textPaint.fontMetrics
         charWidth = textPaint.measureText("M")
@@ -50,6 +57,39 @@ class TerminalView(context: Context) : View(context) {
 
     fun snapshot(): List<CharArray> {
         return buffer.snapshot()
+    }
+
+    fun attach(session: SessionRuntime) {
+        detach()
+        attachedSession = session
+
+        val listener: (ByteArray) -> Unit = { bytes ->
+            val text = String(bytes, StandardCharsets.UTF_8)
+            post {
+                write(text)
+            }
+        }
+
+        outputListener = listener
+        session.attach(listener)
+        requestFocus()
+    }
+
+    fun detach() {
+        val session = attachedSession
+        val listener = outputListener
+
+        if (session != null && listener != null) {
+            session.detach(listener)
+        }
+
+        attachedSession = null
+        outputListener = null
+    }
+
+    override fun onDetachedFromWindow() {
+        detach()
+        super.onDetachedFromWindow()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -96,10 +136,9 @@ class TerminalView(context: Context) : View(context) {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.action == MotionEvent.ACTION_DOWN) {
+            requestFocus()
+        }
         return true
-    }
-
-    fun showContextMenu() {
-        performLongClick()
     }
 }
