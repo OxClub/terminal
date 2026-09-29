@@ -23,8 +23,8 @@ jobs:
           cache-read-only: false
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-      - name: Install Android/NDK tools
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;27.0.12077973"
+      - name: Install Android/NDK platform-tools
+        run: sdkmanager "platforms;android-35" "build-platform-tools;35.0.0" "cmake;3.22.1" "ndk;27.0.12077973"
       - name: Build debug APK
         run: gradle --no-daemon testDebugUnitTest assembleDebug
       - name: Upload APK
