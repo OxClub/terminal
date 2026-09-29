@@ -1,0 +1,72 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- outer neon terminal frame -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#00D9FF"
+        android:strokeWidth="5"
+        android:strokeLineJoin="round"
+        android:pathData="M18,10 L90,10 C95,10 98,13 98,18 L98,90 C98,95 95,98 90,98 L18,98 C13,98 10,95 10,90 L10,18 C10,13 13,10 18,10 Z"/>
+
+    <!-- inner terminal panel -->
+    <path
+        android:fillColor="#07101C"
+        android:pathData="M20,19 L88,19 C90,19 91,20 91,22 L91,86 C91,88 90,89 88,89 L20,89 C18,89 17,88 17,86 L17,22 C17,20 18,19 20,19 Z"/>
+
+    <!-- top circuit -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#168CFF"
+        android:strokeWidth="1.5"
+        android:pathData="M31,20 L43,20 L51,28 L67,28 L74,35 L91,35"/>
+
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#168CFF"
+        android:strokeWidth="1.5"
+        android:pathData="M73,20 L80,27 L91,27"/>
+
+    <!-- bottom circuit -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#168CFF"
+        android:strokeWidth="1.5"
+        android:pathData="M17,73 L25,81 L39,81 L47,89"/>
+
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#168CFF"
+        android:strokeWidth="1.5"
+        android:pathData="M72,89 L78,83 L91,83"/>
+
+    <!-- terminal prompt > -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#F5FCFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M31,40 L50,54 L31,68"/>
+
+    <!-- cursor _ -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#F5FCFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M59,68 L77,68"/>
+
+    <!-- small tech marks -->
+    <path
+        android:fillColor="#168CFF"
+        android:pathData="M76,39 L80,39 L84,43 L80,43 Z"/>
+
+    <path
+        android:fillColor="#168CFF"
+        android:pathData="M83,39 L87,39 L91,43 L87,43 Z"/>
+
+</vector>
