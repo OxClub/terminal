@@ -409,7 +409,7 @@ class TerminalView(context: Context) : View(context) {
 
                     paint.typeface =
                         if (cell.bold)
-                            Typeface.MONOSPACE_BOLD
+                            Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
                         else
                             Typeface.MONOSPACE
 

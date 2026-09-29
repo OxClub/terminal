@@ -409,17 +409,17 @@ class TerminalBuffer(
 
                 22 -> bold = false
 
-                30..37 -> fg = code - 30
+                in 30..37 -> fg = code - 30
 
                 39 -> fg = 7
 
-                40..47 -> bg = code - 40
+                in 40..47 -> bg = code - 40
 
                 49 -> bg = 0
 
-                90..97 -> fg = code - 90 + 8
+                in 90..97 -> fg = code - 90 + 8
 
-                100..107 -> bg = code - 100 + 8
+                in 100..107 -> bg = code - 100 + 8
 
                 38, 48 -> {
                     val isForeground = code == 38
