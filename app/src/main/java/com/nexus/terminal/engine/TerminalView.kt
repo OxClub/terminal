@@ -20,67 +20,73 @@ class TerminalView(context: Context) : View(context) {
 
     private val buffer = TerminalBuffer()
 
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(235, 240, 245)
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = Typeface.MONOSPACE
         textSize = 27f
     }
 
-    private val bgPaint = Paint().apply {
-        color = Color.rgb(7, 10, 13)
-    }
-
-    private val cursorPaint = Paint().apply {
-        color = Color.rgb(0, 220, 255)
-    }
+    private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     private var charWidth = 16f
     private var lineHeight = 32f
 
-    private var session: SessionRuntime? = null
-    private var listener: ((ByteArray) -> Unit)? = null
+    private var attachedSession: SessionRuntime? = null
+    private var outputListener: ((ByteArray) -> Unit)? = null
 
     private val main = Handler(Looper.getMainLooper())
+
+    private var cursorVisible = true
+
+    private val blink = object : Runnable {
+        override fun run() {
+            cursorVisible = !cursorVisible
+            invalidate()
+            main.postDelayed(this, 530)
+        }
+    }
 
     var onCommandSubmitted: ((String) -> Unit)? = null
 
     init {
         isFocusable = true
         isFocusableInTouchMode = true
-        setBackgroundColor(Color.rgb(7, 10, 13))
+        setBackgroundColor(Color.rgb(5, 8, 12))
+        main.post(blink)
     }
 
-    fun attach(runtime: SessionRuntime) {
+    fun attach(session: SessionRuntime) {
         detach()
 
-        session = runtime
+        attachedSession = session
 
-        val l: (ByteArray) -> Unit = { bytes ->
-            val text = String(bytes, StandardCharsets.UTF_8)
-
+        val listener: (ByteArray) -> Unit = { bytes ->
             main.post {
-                buffer.write(text)
+                buffer.write(
+                    String(bytes, StandardCharsets.UTF_8)
+                )
+
                 invalidate()
             }
         }
 
-        listener = l
-        runtime.attach(l)
+        outputListener = listener
+
+        session.attach(listener)
 
         requestFocus()
         showKeyboard()
     }
 
     fun detach() {
-        val s = session
-        val l = listener
+        val s = attachedSession
+        val l = outputListener
 
         if (s != null && l != null) {
             s.detach(l)
         }
 
-        session = null
-        listener = null
+        attachedSession = null
+        outputListener = null
     }
 
     private fun showKeyboard() {
@@ -88,14 +94,27 @@ class TerminalView(context: Context) : View(context) {
             requestFocus()
 
             val imm =
-                context.getSystemService(Context.INPUT_METHOD_SERVICE)
-                        as InputMethodManager
+                context.getSystemService(
+                    Context.INPUT_METHOD_SERVICE
+                ) as InputMethodManager
 
             imm.showSoftInput(
                 this,
                 InputMethodManager.SHOW_IMPLICIT
             )
         }, 150)
+    }
+
+    private fun send(text: String) {
+        attachedSession?.send(text)
+
+        if (text.contains('\r') || text.contains('\n')) {
+            onCommandSubmitted?.invoke("")
+        }
+    }
+
+    private fun sendBytes(bytes: ByteArray) {
+        attachedSession?.sendBytes(bytes)
     }
 
     override fun onCheckIsTextEditor(): Boolean = true
@@ -118,9 +137,8 @@ class TerminalView(context: Context) : View(context) {
                 text: CharSequence,
                 newCursorPosition: Int
             ): Boolean {
-
                 if (text.isNotEmpty()) {
-                    writeToPty(text.toString())
+                    send(text.toString())
                 }
 
                 return true
@@ -130,9 +148,8 @@ class TerminalView(context: Context) : View(context) {
                 text: CharSequence,
                 newCursorPosition: Int
             ): Boolean {
-
                 if (text.isNotEmpty()) {
-                    writeToPty(text.toString())
+                    send(text.toString())
                 }
 
                 return true
@@ -142,9 +159,8 @@ class TerminalView(context: Context) : View(context) {
                 beforeLength: Int,
                 afterLength: Int
             ): Boolean {
-
                 repeat(beforeLength.coerceAtMost(16)) {
-                    writeToPty("\u007F")
+                    send("\u007F")
                 }
 
                 return true
@@ -153,29 +169,19 @@ class TerminalView(context: Context) : View(context) {
             override fun sendKeyEvent(
                 event: KeyEvent
             ): Boolean {
-
-                if (event.action != KeyEvent.ACTION_DOWN) {
-                    return true
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    return handleKey(event)
                 }
 
-                return handleKey(event)
+                return true
             }
 
             override fun performEditorAction(
                 editorAction: Int
             ): Boolean {
-
-                writeToPty("\r")
+                send("\r")
                 return true
             }
-        }
-    }
-
-    private fun writeToPty(text: String) {
-        session?.send(text)
-
-        if (text.contains('\r') || text.contains('\n')) {
-            onCommandSubmitted?.invoke("")
         }
     }
 
@@ -183,7 +189,6 @@ class TerminalView(context: Context) : View(context) {
         keyCode: Int,
         event: KeyEvent
     ): Boolean {
-
         return handleKey(event)
     }
 
@@ -191,30 +196,23 @@ class TerminalView(context: Context) : View(context) {
         event: KeyEvent
     ): Boolean {
 
-        val ctrl = event.isCtrlPressed
-        val alt = event.isAltPressed
+        if (event.isCtrlPressed) {
+            val u = event.unicodeChar
 
-        if (ctrl) {
-            val unicode = event.unicodeChar
+            if (u != 0) {
+                val ctrl = u and 0x1F
 
-            if (unicode != 0) {
-                val value = unicode and 0x1f
-
-                if (value != 0) {
-                    session?.sendBytes(
-                        byteArrayOf(value.toByte())
-                    )
-
+                if (ctrl != 0) {
+                    sendBytes(byteArrayOf(ctrl.toByte()))
                     return true
                 }
             }
         }
 
-        if (alt && event.unicodeChar != 0) {
-
-            session?.sendBytes(
+        if (event.isAltPressed && event.unicodeChar != 0) {
+            sendBytes(
                 byteArrayOf(
-                    0x1b,
+                    0x1B,
                     event.unicodeChar.toByte()
                 )
             )
@@ -224,11 +222,15 @@ class TerminalView(context: Context) : View(context) {
 
         val sequence = when (event.keyCode) {
 
-            KeyEvent.KEYCODE_ENTER ->
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER ->
                 "\r"
 
             KeyEvent.KEYCODE_DEL ->
                 "\u007F"
+
+            KeyEvent.KEYCODE_FORWARD_DEL ->
+                "\u001B[3~"
 
             KeyEvent.KEYCODE_TAB ->
                 "\t"
@@ -242,11 +244,11 @@ class TerminalView(context: Context) : View(context) {
             KeyEvent.KEYCODE_DPAD_DOWN ->
                 "\u001B[B"
 
-            KeyEvent.KEYCODE_DPAD_LEFT ->
-                "\u001B[D"
-
             KeyEvent.KEYCODE_DPAD_RIGHT ->
                 "\u001B[C"
+
+            KeyEvent.KEYCODE_DPAD_LEFT ->
+                "\u001B[D"
 
             KeyEvent.KEYCODE_MOVE_HOME ->
                 "\u001B[H"
@@ -264,14 +266,14 @@ class TerminalView(context: Context) : View(context) {
         }
 
         if (sequence != null) {
-            writeToPty(sequence)
+            send(sequence)
             return true
         }
 
         val unicode = event.unicodeChar
 
         if (unicode != 0) {
-            writeToPty(unicode.toChar().toString())
+            send(unicode.toChar().toString())
             return true
         }
 
@@ -296,78 +298,154 @@ class TerminalView(context: Context) : View(context) {
         oldw: Int,
         oldh: Int
     ) {
-
         super.onSizeChanged(w, h, oldw, oldh)
 
         charWidth =
-            textPaint.measureText("M").coerceAtLeast(1f)
+            paint.measureText("M").coerceAtLeast(1f)
 
         lineHeight =
-            (textPaint.fontMetrics.descent -
-             textPaint.fontMetrics.ascent)
+            (paint.fontMetrics.descent -
+             paint.fontMetrics.ascent)
                 .coerceAtLeast(1f)
 
-        val columns =
-            (w / charWidth)
-                .toInt()
-                .coerceAtLeast(1)
+        val cols =
+            (w / charWidth).toInt().coerceAtLeast(1)
 
         val rows =
-            (h / lineHeight)
-                .toInt()
-                .coerceAtLeast(1)
+            (h / lineHeight).toInt().coerceAtLeast(1)
 
-        buffer.resize(columns, rows)
+        buffer.resize(cols, rows)
 
-        session?.resize(
+        attachedSession?.resize(
             rows,
-            columns,
+            cols,
             w,
             h
         )
     }
 
-    override fun onDetachedFromWindow() {
-        detach()
-        super.onDetachedFromWindow()
+    private fun ansiColor(index: Int): Int {
+
+        val normal = intArrayOf(
+            Color.rgb(0, 0, 0),
+            Color.rgb(205, 49, 49),
+            Color.rgb(13, 188, 121),
+            Color.rgb(229, 229, 16),
+            Color.rgb(36, 114, 200),
+            Color.rgb(188, 63, 188),
+            Color.rgb(17, 168, 205),
+            Color.rgb(229, 229, 229)
+        )
+
+        val bright = intArrayOf(
+            Color.rgb(102, 102, 102),
+            Color.rgb(241, 76, 76),
+            Color.rgb(35, 209, 139),
+            Color.rgb(245, 245, 67),
+            Color.rgb(59, 142, 234),
+            Color.rgb(214, 112, 214),
+            Color.rgb(41, 184, 219),
+            Color.rgb(255, 255, 255)
+        )
+
+        return when {
+            index in 0..7 -> normal[index]
+            index in 8..15 -> bright[index - 8]
+
+            index in 16..231 -> {
+                val n = index - 16
+                val r = n / 36
+                val g = (n % 36) / 6
+                val b = n % 6
+
+                fun v(x: Int): Int =
+                    if (x == 0) 0 else 55 + x * 40
+
+                Color.rgb(v(r), v(g), v(b))
+            }
+
+            index in 232..255 -> {
+                val v = 8 + (index - 232) * 10
+                Color.rgb(v, v, v)
+            }
+
+            else -> Color.WHITE
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
 
-        canvas.drawRect(
-            0f,
-            0f,
-            width.toFloat(),
-            height.toFloat(),
-            bgPaint
-        )
+        canvas.drawColor(Color.rgb(5, 8, 12))
 
-        val lines = buffer.snapshot()
+        val cells = buffer.cells()
 
-        for (row in lines.indices) {
+        for (row in cells.indices) {
 
-            canvas.drawText(
-                String(lines[row]),
-                0f,
-                lineHeight * (row + 1),
-                textPaint
-            )
+            val line = cells[row]
+
+            for (col in line.indices) {
+
+                val cell = line[col]
+
+                val x = col * charWidth
+                val y = row * lineHeight
+
+                if (cell.bg != 0) {
+                    cursorPaint.color = ansiColor(cell.bg)
+
+                    canvas.drawRect(
+                        x,
+                        y,
+                        x + charWidth,
+                        y + lineHeight,
+                        cursorPaint
+                    )
+                }
+
+                if (cell.ch != ' ') {
+
+                    paint.color = ansiColor(cell.fg)
+
+                    paint.typeface =
+                        if (cell.bold)
+                            Typeface.MONOSPACE_BOLD
+                        else
+                            Typeface.MONOSPACE
+
+                    canvas.drawText(
+                        cell.ch.toString(),
+                        x,
+                        y - paint.fontMetrics.ascent,
+                        paint
+                    )
+                }
+            }
         }
 
-        val cursor = buffer.cursorPosition()
+        if (cursorVisible) {
 
-        val x =
-            cursor.second * charWidth
+            val cursor = buffer.cursorPosition()
 
-        val y =
-            cursor.first * lineHeight
+            val x = cursor.second * charWidth
+            val y = cursor.first * lineHeight
 
-        canvas.drawRect(
-            x,
-            y,
-            x + charWidth,
-            y + lineHeight,
-            cursorPaint
-        )
+            cursorPaint.color =
+                Color.argb(190, 0, 220, 255)
+
+            canvas.drawRect(
+                x,
+                y,
+                x + charWidth,
+                y + lineHeight,
+                cursorPaint
+            )
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        main.removeCallbacks(blink)
+        detach()
+        super.onDetachedFromWindow()
     }
 }
